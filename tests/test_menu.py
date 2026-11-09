@@ -8,9 +8,7 @@ from menu import ConsoleMenu
 class ConsoleMenuTests(unittest.TestCase):
     @patch("builtins.input", side_effect=["3", "1", "5"])
     @patch("builtins.print")
-    def test_read_action_uses_injected_operations(
-        self, _print: Mock, _input: Mock
-    ) -> None:
+    def test_read_action_uses_injected_operations(self, _print, _input):
         operations = Mock()
         operations.read.return_value = []
 

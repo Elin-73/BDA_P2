@@ -1,30 +1,11 @@
-from typing import Protocol
-
-from controllers import ENTITY_TYPES, EntityDefinition, FieldDefinition
-
-
-class CRUDOperations(Protocol):
-    def create(
-        self, entity: EntityDefinition, properties: dict[str, object]
-    ) -> bool: ...
-
-    def read(self, entity: EntityDefinition) -> list[dict[str, object]]: ...
-
-    def update(
-        self,
-        entity: EntityDefinition,
-        identifier: str,
-        updates: dict[str, object],
-    ) -> dict[str, object] | None: ...
-
-    def delete(self, entity: EntityDefinition, identifier: str) -> bool: ...
+from controllers import ENTITY_TYPES
 
 
 class ConsoleMenu:
-    def __init__(self, operations: CRUDOperations) -> None:
+    def __init__(self, operations):
         self._operations = operations
 
-    def run(self) -> None:
+    def run(self):
         print("¡Bienvenido al portal de la Inmobiliaria Mendoza!")
         while True:
             print("\nSeleccione una opción:")
@@ -55,10 +36,10 @@ class ConsoleMenu:
             else:
                 self._delete(entity)
 
-    def _select_entity(self) -> EntityDefinition | None:
+    def _select_entity(self):
         print("\nSeleccione el tipo de registro:")
         for index, entity in enumerate(ENTITY_TYPES, start=1):
-            print(f"{index}. {entity.singular.title()}")
+            print(f"{index}. {entity['singular'].title()}")
         print("0. Volver")
 
         choice = input("Opción: ").strip()
@@ -69,31 +50,33 @@ class ConsoleMenu:
             return None
         return ENTITY_TYPES[int(choice) - 1]
 
-    def _create(self, entity: EntityDefinition) -> None:
-        properties = {
-            field.name: self._read_field(field) for field in entity.fields
-        }
-        if self._operations.create(entity, properties):
-            print(f"{entity.singular.title()} creada correctamente.")
-        else:
-            print(f"No se pudo crear la {entity.singular}.")
+    def _create(self, entity):
+        properties = {}
+        for field in entity["fields"]:
+            properties[field["name"]] = self._read_field(field)
 
-    def _read(self, entity: EntityDefinition) -> None:
+        if self._operations.create(entity, properties):
+            print(f"{entity['singular'].title()} creada correctamente.")
+        else:
+            print(f"No se pudo crear la {entity['singular']}.")
+
+    def _read(self, entity):
         records = self._operations.read(entity)
         if not records:
-            print(f"No hay {entity.plural} registradas.")
+            print(f"No hay {entity['plural']} registradas.")
             return
         for record in records:
             print(" | ".join(f"{key}: {value}" for key, value in record.items()))
 
-    def _update(self, entity: EntityDefinition) -> None:
-        identifier = input(f"ID de la {entity.singular}: ").strip()
+    def _update(self, entity):
+        identifier = input(f"ID de la {entity['singular']}: ").strip()
+        editable_fields = [
+            field for field in entity["fields"] if field["name"] != "id"
+        ]
+
         print("Campos disponibles:")
-        editable_fields = tuple(
-            field for field in entity.fields if field.name != "id"
-        )
         for index, field in enumerate(editable_fields, start=1):
-            print(f"{index}. {field.prompt}")
+            print(f"{index}. {field['prompt']}")
 
         choice = input("Campo a actualizar: ").strip()
         if not choice.isdigit() or not 1 <= int(choice) <= len(editable_fields):
@@ -103,25 +86,25 @@ class ConsoleMenu:
         field = editable_fields[int(choice) - 1]
         value = self._read_field(field)
         updated = self._operations.update(
-            entity, identifier, {field.name: value}
+            entity, identifier, {field["name"]: value}
         )
         if updated is None:
-            print(f"No se encontró {entity.singular} con ID {identifier}.")
+            print(f"No se encontró {entity['singular']} con ID {identifier}.")
         else:
-            print(f"{entity.singular.title()} actualizada correctamente.")
+            print(f"{entity['singular'].title()} actualizada correctamente.")
 
-    def _delete(self, entity: EntityDefinition) -> None:
-        identifier = input(f"ID de la {entity.singular}: ").strip()
+    def _delete(self, entity):
+        identifier = input(f"ID de la {entity['singular']}: ").strip()
         if self._operations.delete(entity, identifier):
-            print(f"{entity.singular.title()} eliminada correctamente.")
+            print(f"{entity['singular'].title()} eliminada correctamente.")
         else:
-            print(f"No se encontró {entity.singular} con ID {identifier}.")
+            print(f"No se encontró {entity['singular']} con ID {identifier}.")
 
     @staticmethod
-    def _read_field(field: FieldDefinition) -> object:
+    def _read_field(field):
         while True:
-            value = input(f"{field.prompt}: ").strip()
+            value = input(f"{field['prompt']}: ").strip()
             try:
-                return field.value_type(value)
+                return field["value_type"](value)
             except ValueError:
-                print(f"'{value}' no es un valor válido para {field.prompt}.")
+                print(f"'{value}' no es un valor válido para {field['prompt']}.")

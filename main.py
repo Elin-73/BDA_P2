@@ -7,14 +7,14 @@ from controllers import MemgraphController
 from menu import ConsoleMenu
 
 
-def required_env(name: str) -> str:
+def required_env(name):
     value = os.getenv(name)
     if not value:
         raise RuntimeError(f"Falta la variable de entorno requerida '{name}'.")
     return value
 
 
-def main() -> None:
+def main():
     load_dotenv(Path(__file__).with_name(".env"))
 
     try:

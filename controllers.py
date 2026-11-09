@@ -1,77 +1,66 @@
-from dataclasses import dataclass
-from typing import Iterable, Protocol
-
-
-class QueryConnection(Protocol):
-    def execute_and_fetch(
-        self, query: str, parameters: dict[str, object] | None = None
-    ) -> Iterable[dict[str, object]]: ...
-
-
-@dataclass(frozen=True)
-class FieldDefinition:
-    name: str
-    prompt: str
-    value_type: type[str] | type[int] | type[float] = str
-
-
-@dataclass(frozen=True)
-class EntityDefinition:
-    label: str
-    singular: str
-    plural: str
-    fields: tuple[FieldDefinition, ...]
-
-
-ENTITY_TYPES = (
-    EntityDefinition(
-        "Propiedad",
-        "propiedad",
-        "propiedades",
-        (
-            FieldDefinition("id", "ID"),
-            FieldDefinition("direccion", "Dirección"),
-            FieldDefinition("precio", "Precio", float),
-            FieldDefinition("habitaciones", "Número de habitaciones", int),
-            FieldDefinition("baños", "Número de baños", int),
-            FieldDefinition("metros_cuadrados", "Metros cuadrados", float),
-        ),
-    ),
-    EntityDefinition(
-        "Cliente",
-        "cliente",
-        "clientes",
-        (
-            FieldDefinition("id", "ID"),
-            FieldDefinition("nombre", "Nombre"),
-            FieldDefinition("correo_electronico", "Correo electrónico"),
-            FieldDefinition("telefono", "Teléfono"),
-        ),
-    ),
-    EntityDefinition(
-        "Asesor",
-        "asesor",
-        "asesores",
-        (
-            FieldDefinition("id", "ID"),
-            FieldDefinition("nombre", "Nombre"),
-            FieldDefinition("correo_electronico", "Correo electrónico"),
-            FieldDefinition("telefono", "Teléfono"),
-        ),
-    ),
-)
+ENTITY_TYPES = [
+    {
+        "label": "Propiedad",
+        "singular": "propiedad",
+        "plural": "propiedades",
+        "fields": [
+            {"name": "id", "prompt": "ID", "value_type": str},
+            {"name": "direccion", "prompt": "Dirección", "value_type": str},
+            {"name": "precio", "prompt": "Precio", "value_type": float},
+            {
+                "name": "habitaciones",
+                "prompt": "Número de habitaciones",
+                "value_type": int,
+            },
+            {"name": "baños", "prompt": "Número de baños", "value_type": int},
+            {
+                "name": "metros_cuadrados",
+                "prompt": "Metros cuadrados",
+                "value_type": float,
+            },
+        ],
+    },
+    {
+        "label": "Cliente",
+        "singular": "cliente",
+        "plural": "clientes",
+        "fields": [
+            {"name": "id", "prompt": "ID", "value_type": str},
+            {"name": "nombre", "prompt": "Nombre", "value_type": str},
+            {
+                "name": "correo_electronico",
+                "prompt": "Correo electrónico",
+                "value_type": str,
+            },
+            {"name": "telefono", "prompt": "Teléfono", "value_type": str},
+        ],
+    },
+    {
+        "label": "Asesor",
+        "singular": "asesor",
+        "plural": "asesores",
+        "fields": [
+            {"name": "id", "prompt": "ID", "value_type": str},
+            {"name": "nombre", "prompt": "Nombre", "value_type": str},
+            {
+                "name": "correo_electronico",
+                "prompt": "Correo electrónico",
+                "value_type": str,
+            },
+            {"name": "telefono", "prompt": "Teléfono", "value_type": str},
+        ],
+    },
+]
 
 
 class MemgraphController:
-    def __init__(self, connection: QueryConnection) -> None:
+    def __init__(self, connection):
         self._connection = connection
 
-    def create(
-        self, entity: EntityDefinition, properties: dict[str, object]
-    ) -> bool:
+    def create(self, entity, properties):
         self._validate_properties(entity, properties)
         query = (
-            f"CREATE (node:{entity.label}) "
+            f"CREATE (node:{entity['label']}) "
             "SET node += $properties "
             "RETURN node.id AS id"
         )
@@ -84,9 +73,9 @@ class MemgraphController:
             None,
         ) is not None
 
-    def read(self, entity: EntityDefinition) -> list[dict[str, object]]:
+    def read(self, entity):
         query = (
-            f"MATCH (node:{entity.label}) "
+            f"MATCH (node:{entity['label']}) "
             "RETURN properties(node) AS properties "
             "ORDER BY node.id"
         )
@@ -95,18 +84,15 @@ class MemgraphController:
             for record in self._connection.execute_and_fetch(query)
         ]
 
-    def update(
-        self,
-        entity: EntityDefinition,
-        identifier: str,
-        updates: dict[str, object],
-    ) -> dict[str, object] | None:
-        allowed_fields = {field.name for field in entity.fields} - {"id"}
+    def update(self, entity, identifier, updates):
+        allowed_fields = {
+            field["name"] for field in entity["fields"] if field["name"] != "id"
+        }
         if not updates or not updates.keys() <= allowed_fields:
             raise ValueError("Seleccione al menos un campo válido para actualizar.")
 
         query = (
-            f"MATCH (node:{entity.label} {{id: $id}}) "
+            f"MATCH (node:{entity['label']} {{id: $id}}) "
             "SET node += $updates "
             "RETURN properties(node) AS properties"
         )
@@ -120,9 +106,9 @@ class MemgraphController:
         )
         return dict(record["properties"]) if record is not None else None
 
-    def delete(self, entity: EntityDefinition, identifier: str) -> bool:
+    def delete(self, entity, identifier):
         query = (
-            f"MATCH (node:{entity.label} {{id: $id}}) "
+            f"MATCH (node:{entity['label']} {{id: $id}}) "
             "WITH collect(node) AS matches "
             "FOREACH (node IN matches | DETACH DELETE node) "
             "RETURN size(matches) AS deleted"
@@ -134,11 +120,9 @@ class MemgraphController:
         return record is not None and record["deleted"] > 0
 
     @staticmethod
-    def _validate_properties(
-        entity: EntityDefinition, properties: dict[str, object]
-    ) -> None:
-        expected_fields = {field.name for field in entity.fields}
+    def _validate_properties(entity, properties):
+        expected_fields = {field["name"] for field in entity["fields"]}
         if properties.keys() != expected_fields:
             raise ValueError(
-                f"Los campos para {entity.singular} no coinciden con el modelo."
+                f"Los campos para {entity['singular']} no coinciden con el modelo."
             )
