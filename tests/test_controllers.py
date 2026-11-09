@@ -62,6 +62,48 @@ class MemgraphControllerTests(unittest.TestCase):
         self.assertNotIn("a' OR true", connection.query)
         self.assertEqual(connection.parameters, {"id": "a' OR true //"})
 
+    def test_set_distance_uses_property_ids_as_parameters(self):
+        connection = FakeConnection([{"distance": 5.0}])
+        controller = MemgraphController(connection)
+
+        created = controller.set_distance_between_properties("p1", "p2")
+
+        self.assertTrue(created)
+        self.assertNotIn("'p1'", connection.query)
+        self.assertEqual(
+            connection.parameters, {"property1_id": "p1", "property2_id": "p2"}
+        )
+
+    def test_shortest_property_path_uses_total_distance(self):
+        class PathConnection:
+            def execute_and_fetch(self, query, parameters=None):
+                if "RETURN p.id AS id" in query:
+                    return [{"id": property_id} for property_id in ("p1", "p2", "p3")]
+                return [
+                    {"source_id": "p1", "target_id": "p2", "distance": 3},
+                    {"source_id": "p1", "target_id": "p3", "distance": 1},
+                    {"source_id": "p3", "target_id": "p2", "distance": 1},
+                ]
+
+        result = MemgraphController(PathConnection()).find_shortest_property_path(
+            "p1", "p2"
+        )
+
+        self.assertEqual(result, {"properties": ["p1", "p3", "p2"], "distance": 2})
+
+    def test_shortest_property_path_returns_none_when_unreachable(self):
+        class PathConnection:
+            def execute_and_fetch(self, query, parameters=None):
+                if "RETURN p.id AS id" in query:
+                    return [{"id": "p1"}, {"id": "p2"}]
+                return []
+
+        result = MemgraphController(PathConnection()).find_shortest_property_path(
+            "p1", "p2"
+        )
+
+        self.assertIsNone(result)
+
 
 if __name__ == "__main__":
     unittest.main()

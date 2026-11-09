@@ -28,6 +28,11 @@ Después inicia el CLI con:
 - `menu.py`: presenta el menú y solicita datos al usuario.
 - `controllers.py`: ejecuta las operaciones CRUD de Memgraph.
 
+El menú también permite relacionar dos propiedades con su distancia, consultar
+propiedades dentro de un radio y mostrar la ruta de distancia total mínima entre
+dos propiedades, incluidos los puntos intermedios. Para encontrar una ruta,
+primero deben existir las relaciones de distancia necesarias.
+
 El menú depende de una interfaz CRUD y recibe sus operaciones por inyección; así
 la interacción y el acceso a datos se pueden cambiar o probar por separado.
 

@@ -1,3 +1,5 @@
+import math
+
 from controllers import ENTITY_TYPES
 
 
@@ -11,16 +13,29 @@ class ConsoleMenu:
             print("\nSeleccione una opción:")
             print("1. Crear")
             print("2. Actualizar")
-            print("3. Leer")
+            print("3. Consultar")
             print("4. Eliminar")
-            print("5. Salir")
+            print("5. Establecer distancia entre propiedades")
+            print("6. Consultar propiedades dentro de un radio")
+            print("7. Encontrar la ruta más corta entre propiedades")
+            print("8. Salir")
 
             choice = input("Opción: ").strip()
-            if choice == "5":
+            if choice == "8":
                 print("Hasta luego.")
                 return
-            if choice not in {"1", "2", "3", "4"}:
+            if choice not in {"1", "2", "3", "4", "5", "6", "7", "8"}:
                 print("Opción inválida. Intente de nuevo.")
+                continue
+
+            if choice == "5":
+                self._set_distance_between_properties()
+                continue
+            if choice == "6":
+                self._query_properties_within_radius()
+                continue
+            if choice == "7":
+                self._find_shortest_property_path()
                 continue
 
             entity = self._select_entity()
@@ -99,6 +114,43 @@ class ConsoleMenu:
             print(f"{entity['singular'].title()} eliminada correctamente.")
         else:
             print(f"No se encontró {entity['singular']} con ID {identifier}.")
+
+    def _set_distance_between_properties(self):
+        property1_id = input("ID de la primera propiedad: ").strip()
+        property2_id = input("ID de la segunda propiedad: ").strip()
+        if self._operations.set_distance_between_properties(
+            property1_id, property2_id
+        ):
+            print("Distancia establecida correctamente.")
+        else:
+            print("No se pudo establecer la distancia entre las propiedades.")
+
+    def _query_properties_within_radius(self):
+        entity_id = input("ID de la propiedad: ").strip()
+        radius = input("Radio (en metros): ").strip()
+        try:
+            radius = float(radius)
+            if not math.isfinite(radius) or radius < 0:
+                raise ValueError
+        except ValueError:
+            print("Radio inválido. Debe ser un número.")
+            return
+        properties = self._operations.query_properties_within_radius(entity_id, radius)
+        if not properties:
+            print("No se encontraron propiedades dentro del radio especificado.")
+            return
+        for property_record in properties:
+            print(" | ".join(f"{key}: {value}" for key, value in property_record.items()))
+
+    def _find_shortest_property_path(self):
+        start_id = input("ID de la propiedad de origen: ").strip()
+        end_id = input("ID de la propiedad de destino: ").strip()
+        result = self._operations.find_shortest_property_path(start_id, end_id)
+        if result is None:
+            print("No se encontró una ruta entre las propiedades.")
+            return
+        print("Ruta: " + " -> ".join(result["properties"]))
+        print(f"Distancia total: {result['distance']}")
 
     @staticmethod
     def _read_field(field):
