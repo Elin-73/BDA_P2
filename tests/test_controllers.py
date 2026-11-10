@@ -34,6 +34,27 @@ class MemgraphControllerTests(unittest.TestCase):
         self.assertNotIn("Calle 1", connection.query)
         self.assertEqual(connection.parameters, {"properties": properties})
 
+    def test_create_for_advisor_assigns_property_to_existing_advisor(self):
+        connection = FakeConnection([{"id": "p1"}])
+        controller = MemgraphController(connection)
+        properties = {
+            "id": "p1",
+            "direccion": "Calle 1",
+            "precio": 100.0,
+            "habitaciones": 2,
+            "baños": 1,
+            "metros_cuadrados": 80.0,
+        }
+
+        created = controller.create(ENTITY_TYPES[0], properties, advisor_id="a1")
+
+        self.assertTrue(created)
+        self.assertIn("MATCH (advisor:Asesor", connection.query)
+        self.assertIn("CREATE (advisor)-[:ASSIGNED_TO]->(node)", connection.query)
+        self.assertEqual(
+            connection.parameters, {"advisor_id": "a1", "properties": properties}
+        )
+
     def test_read_returns_records_for_selected_entity(self):
         connection = FakeConnection([{"properties": {"id": "c1", "nombre": "Ana"}}])
         controller = MemgraphController(connection)
@@ -52,6 +73,31 @@ class MemgraphControllerTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             controller.update(ENTITY_TYPES[1], "c1", {"unknown": "value"})
 
+    def test_advisor_property_read_and_update_are_scoped_to_assignment(self):
+        connection = FakeConnection([{"properties": {"id": "p1"}}])
+        controller = MemgraphController(connection)
+
+        controller.read(ENTITY_TYPES[0], advisor_id="a1")
+        self.assertIn("(advisor:Asesor {id: $advisor_id})-[:ASSIGNED_TO]", connection.query)
+        self.assertEqual(connection.parameters, {"advisor_id": "a1"})
+
+        controller.update(
+            ENTITY_TYPES[0], "p1", {"precio": 200.0}, advisor_id="a1"
+        )
+        self.assertIn("(advisor:Asesor {id: $advisor_id})-[:ASSIGNED_TO]", connection.query)
+        self.assertEqual(
+            connection.parameters,
+            {"id": "p1", "updates": {"precio": 200.0}, "advisor_id": "a1"},
+        )
+
+    def test_get_advisor_uses_parameterized_identifier(self):
+        connection = FakeConnection([{"properties": {"id": "a1"}}])
+
+        advisor = MemgraphController(connection).get_advisor("a1")
+
+        self.assertEqual(advisor, {"id": "a1"})
+        self.assertEqual(connection.parameters, {"id": "a1"})
+
     def test_delete_uses_id_parameter_and_reports_missing_records(self):
         connection = FakeConnection([{"deleted": 0}])
         controller = MemgraphController(connection)
@@ -66,13 +112,59 @@ class MemgraphControllerTests(unittest.TestCase):
         connection = FakeConnection([{"distance": 5.0}])
         controller = MemgraphController(connection)
 
-        created = controller.set_distance_between_properties("p1", "p2")
+        created = controller.set_distance_between_properties("p1", "p2", 5.0)
 
         self.assertTrue(created)
-        self.assertNotIn("'p1'", connection.query)
+        self.assertIn("MATCH (p1:Propiedad", connection.query)
+        self.assertIn("MATCH (p2:Propiedad", connection.query)
+        self.assertIn("MERGE (p1)-[r:DISTANCE_TO]-(p2)", connection.query)
+        self.assertNotIn("CREATE", connection.query)
         self.assertEqual(
-            connection.parameters, {"property1_id": "p1", "property2_id": "p2"}
+            connection.parameters,
+            {"property1_id": "p1", "property2_id": "p2", "distance": 5.0},
         )
+
+    def test_property_assignment_links_existing_nodes(self):
+        connection = FakeConnection([{"id": "p1"}])
+
+        assigned = MemgraphController(connection).assign_property_to_advisor(
+            "p1", "a1"
+        )
+
+        self.assertTrue(assigned)
+        self.assertIn("MATCH (property:Propiedad", connection.query)
+        self.assertIn("MATCH (advisor:Asesor", connection.query)
+        self.assertIn("MERGE (advisor)-[:ASSIGNED_TO]->(property)", connection.query)
+        self.assertEqual(
+            connection.parameters, {"property_id": "p1", "advisor_id": "a1"}
+        )
+
+    def test_set_distance_returns_false_when_properties_do_not_exist(self):
+        controller = MemgraphController(FakeConnection())
+
+        self.assertFalse(
+            controller.set_distance_between_properties("missing1", "missing2", 5)
+        )
+
+    def test_set_distance_rejects_negative_or_non_finite_values(self):
+        controller = MemgraphController(FakeConnection())
+
+        for distance in (-1, float("inf"), float("nan")):
+            with self.subTest(distance=distance):
+                with self.assertRaises(ValueError):
+                    controller.set_distance_between_properties("p1", "p2", distance)
+
+    def test_radius_query_uses_stored_distance_relationship(self):
+        connection = FakeConnection([{"id": "p2", "direccion": "Calle 2"}])
+        controller = MemgraphController(connection)
+
+        properties = controller.query_properties_within_radius("p1", 6.0)
+
+        self.assertEqual(properties, [{"id": "p2", "direccion": "Calle 2"}])
+        self.assertIn("-[r:DISTANCE_TO]-(other:Propiedad)", connection.query)
+        self.assertIn("r.distance <= $radius", connection.query)
+        self.assertNotIn("distance(", connection.query)
+        self.assertEqual(connection.parameters, {"entity_id": "p1", "radius": 6.0})
 
     def test_shortest_property_path_uses_total_distance(self):
         class PathConnection:

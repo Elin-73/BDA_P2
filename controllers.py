@@ -61,23 +61,44 @@ class MemgraphController:
     def __init__(self, connection):
         self._connection = connection
 
-    def create(self, entity, properties):
+    def create(self, entity, properties, advisor_id=None):
         self._validate_properties(entity, properties)
-        query = (
-            f"CREATE (node:{entity['label']}) "
-            "SET node += $properties "
-            "RETURN node.id AS id"
-        )
+        if entity["label"] == "Propiedad" and advisor_id is not None:
+            query = (
+                "MATCH (advisor:Asesor {id: $advisor_id}) "
+                "CREATE (node:Propiedad) "
+                "SET node += $properties "
+                "CREATE (advisor)-[:ASSIGNED_TO]->(node) "
+                "RETURN node.id AS id"
+            )
+            parameters = {"advisor_id": advisor_id, "properties": properties}
+        else:
+            query = (
+                f"CREATE (node:{entity['label']}) "
+                "SET node += $properties "
+                "RETURN node.id AS id"
+            )
+            parameters = {"properties": properties}
         return next(
             iter(
-                self._connection.execute_and_fetch(
-                    query, {"properties": properties}
-                )
+                self._connection.execute_and_fetch(query, parameters)
             ),
             None,
         ) is not None
 
-    def read(self, entity):
+    def read(self, entity, advisor_id=None):
+        if entity["label"] == "Propiedad" and advisor_id is not None:
+            query = (
+                "MATCH (advisor:Asesor {id: $advisor_id})"
+                "-[:ASSIGNED_TO]->(node:Propiedad) "
+                "RETURN properties(node) AS properties "
+                "ORDER BY node.id"
+            )
+            records = self._connection.execute_and_fetch(
+                query, {"advisor_id": advisor_id}
+            )
+            return [dict(record["properties"]) for record in records]
+
         query = (
             f"MATCH (node:{entity['label']}) "
             "RETURN properties(node) AS properties "
@@ -88,23 +109,42 @@ class MemgraphController:
             for record in self._connection.execute_and_fetch(query)
         ]
 
-    def update(self, entity, identifier, updates):
+    def get_advisor(self, identifier):
+        query = (
+            "MATCH (node:Asesor {id: $id}) "
+            "RETURN properties(node) AS properties"
+        )
+        record = next(
+            iter(self._connection.execute_and_fetch(query, {"id": identifier})),
+            None,
+        )
+        return dict(record["properties"]) if record is not None else None
+
+    def update(self, entity, identifier, updates, advisor_id=None):
         allowed_fields = {
             field["name"] for field in entity["fields"] if field["name"] != "id"
         }
         if not updates or not updates.keys() <= allowed_fields:
             raise ValueError("Seleccione al menos un campo válido para actualizar.")
 
-        query = (
-            f"MATCH (node:{entity['label']} {{id: $id}}) "
-            "SET node += $updates "
-            "RETURN properties(node) AS properties"
-        )
+        parameters = {"id": identifier, "updates": updates}
+        if entity["label"] == "Propiedad" and advisor_id is not None:
+            query = (
+                "MATCH (advisor:Asesor {id: $advisor_id})"
+                "-[:ASSIGNED_TO]->(node:Propiedad {id: $id}) "
+                "SET node += $updates "
+                "RETURN properties(node) AS properties"
+            )
+            parameters["advisor_id"] = advisor_id
+        else:
+            query = (
+                f"MATCH (node:{entity['label']} {{id: $id}}) "
+                "SET node += $updates "
+                "RETURN properties(node) AS properties"
+            )
         record = next(
             iter(
-                self._connection.execute_and_fetch(
-                    query, {"id": identifier, "updates": updates}
-                )
+                self._connection.execute_and_fetch(query, parameters)
             ),
             None,
         )
@@ -123,16 +163,35 @@ class MemgraphController:
         )
         return record is not None and record["deleted"] > 0
 
-    def set_distance_between_properties(self, property1_id, property2_id):
+    def assign_property_to_advisor(self, property_id, advisor_id):
         query = (
-            "MATCH (p1:Propiedad {id: $property1_id}), "
-            "(p2:Propiedad {id: $property2_id}) "
-            "WHERE p1.id <> p2.id "
-            "WITH p1, p2, "
-            "point({x: p1.metros_cuadrados, y: p1.precio}) AS point1, "
-            "point({x: p2.metros_cuadrados, y: p2.precio}) AS point2 "
-            "MERGE (p1)-[r:DISTANCE_TO]->(p2) "
-            "SET r.distance = distance(point1, point2) "
+            "MATCH (property:Propiedad {id: $property_id}) "
+            "MATCH (advisor:Asesor {id: $advisor_id}) "
+            "MERGE (advisor)-[:ASSIGNED_TO]->(property) "
+            "RETURN property.id AS id"
+        )
+        record = next(
+            iter(
+                self._connection.execute_and_fetch(
+                    query, {"property_id": property_id, "advisor_id": advisor_id}
+                )
+            ),
+            None,
+        )
+        return record is not None
+
+    def set_distance_between_properties(self, property1_id, property2_id, distance):
+        if not math.isfinite(distance) or distance < 0:
+            raise ValueError("La distancia debe ser un número finito no negativo.")
+        if property1_id == property2_id:
+            return False
+
+        query = (
+            "MATCH (p1:Propiedad {id: $property1_id}) "
+            "MATCH (p2:Propiedad {id: $property2_id}) "
+            "WHERE p1 <> p2 "
+            "MERGE (p1)-[r:DISTANCE_TO]-(p2) "
+            "SET r.distance = $distance "
             "RETURN r.distance AS distance"
         )
         record = next(
@@ -142,6 +201,7 @@ class MemgraphController:
                     {
                         "property1_id": property1_id,
                         "property2_id": property2_id,
+                        "distance": distance,
                     },
                 )
             ),
@@ -151,13 +211,9 @@ class MemgraphController:
 
     def query_properties_within_radius(self, entity_id, radius):
         query = (
-            "MATCH (p:Propiedad {id: $entity_id}) "
-            "MATCH (other:Propiedad) "
-            "WHERE p.id <> other.id "
-            "WITH p, other, "
-            "point({x: p.metros_cuadrados, y: p.precio}) AS point1, "
-            "point({x: other.metros_cuadrados, y: other.precio}) AS point2 "
-            "WHERE distance(point1, point2) <= $radius "
+            "MATCH (p:Propiedad {id: $entity_id})"
+            "-[r:DISTANCE_TO]-(other:Propiedad) "
+            "WHERE r.distance <= $radius "
             "RETURN other.id AS id, other.direccion AS direccion, "
             "other.precio AS precio, other.habitaciones AS habitaciones, "
             "other.baños AS baños, other.metros_cuadrados AS metros_cuadrados"

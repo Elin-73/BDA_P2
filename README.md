@@ -33,6 +33,12 @@ propiedades dentro de un radio y mostrar la ruta de distancia total mínima entr
 dos propiedades, incluidos los puntos intermedios. Para encontrar una ruta,
 primero deben existir las relaciones de distancia necesarias.
 
+Al iniciar sesión, se elige entre asesor y jefe/captador. El asesor se identifica
+por su ID y puede editar su perfil, administrar clientes y consultar, crear o
+actualizar únicamente las propiedades asignadas; no se agrega autenticación por
+contraseña. El jefe/captador puede administrar todas las entidades y asignar
+propiedades a asesores desde el menú de relaciones.
+
 El menú depende de una interfaz CRUD y recibe sus operaciones por inyección; así
 la interacción y el acceso a datos se pueden cambiar o probar por separado.
 

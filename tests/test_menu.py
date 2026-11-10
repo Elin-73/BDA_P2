@@ -3,10 +3,11 @@ from unittest.mock import Mock, patch
 
 from controllers import ENTITY_TYPES
 from menu import ConsoleMenu
+from menu_propiedades import ConsoleMenu as PropertiesMenu
 
 
 class ConsoleMenuTests(unittest.TestCase):
-    @patch("builtins.input", side_effect=["3", "1", "8"])
+    @patch("builtins.input", side_effect=["2", "2", "3", "0", "0", "0"])
     @patch("builtins.print")
     def test_read_action_uses_injected_operations(self, _print, _input):
         operations = Mock()
@@ -14,31 +15,28 @@ class ConsoleMenuTests(unittest.TestCase):
 
         ConsoleMenu(operations).run()
 
-        operations.read.assert_called_once_with(ENTITY_TYPES[0])
+        operations.read.assert_called_once_with(ENTITY_TYPES[1])
 
-    @patch("builtins.input", side_effect=["7", "p1", "p2", "8"])
+    @patch("builtins.input", side_effect=["1", "a1", "3", "3", "0", "0", "0"])
     @patch("builtins.print")
-    def test_shortest_path_option_uses_property_ids(self, _print, _input):
+    def test_advisor_reads_only_assigned_properties(self, _print, _input):
         operations = Mock()
-        operations.find_shortest_property_path.return_value = {
-            "properties": ["p1", "p3", "p2"],
-            "distance": 12,
-        }
+        operations.get_advisor.return_value = {"id": "a1", "nombre": "Ana"}
+        operations.read.return_value = []
 
         ConsoleMenu(operations).run()
 
-        operations.find_shortest_property_path.assert_called_once_with("p1", "p2")
+        operations.read.assert_called_once_with(ENTITY_TYPES[0], advisor_id="a1")
 
-    @patch("builtins.input", side_effect=["5", "p1", "p2", "8"])
+    @patch("builtins.input", side_effect=["0"])
     @patch("builtins.print")
-    def test_distance_option_uses_two_property_ids(self, _print, _input):
+    def test_advisor_property_menu_does_not_offer_delete(self, print_mock, _input):
         operations = Mock()
 
-        ConsoleMenu(operations).run()
+        PropertiesMenu(operations, "advisor", "a1").run()
 
-        operations.set_distance_between_properties.assert_called_once_with(
-            "p1", "p2"
-        )
+        displayed_options = [call.args[0] for call in print_mock.call_args_list]
+        self.assertNotIn("Eliminar", displayed_options)
 
 
 if __name__ == "__main__":

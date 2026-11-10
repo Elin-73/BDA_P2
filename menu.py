@@ -1,6 +1,7 @@
-import math
-
-from controllers import ENTITY_TYPES
+from menu_asesores import ConsoleMenu as AdvisorsMenu
+from menu_clientes import ConsoleMenu as ClientsMenu
+from menu_propiedades import ConsoleMenu as PropertiesMenu
+from menu_relaciones import ConsoleMenu as RelationsMenu
 
 
 class ConsoleMenu:
@@ -10,153 +11,64 @@ class ConsoleMenu:
     def run(self):
         print("¡Bienvenido al portal de la Inmobiliaria Mendoza!")
         while True:
-            print("\nSeleccione una opción:")
-            print("1. Crear")
-            print("2. Actualizar")
-            print("3. Consultar")
-            print("4. Eliminar")
-            print("5. Establecer distancia entre propiedades")
-            print("6. Consultar propiedades dentro de un radio")
-            print("7. Encontrar la ruta más corta entre propiedades")
-            print("8. Salir")
-
-            choice = input("Opción: ").strip()
-            if choice == "8":
+            print("\nSeleccione su tipo de usuario:")
+            print("1. Asesor")
+            print("2. Jefe / Captador")
+            print("0. Salir")
+            role = input("Opción: ").strip()
+            if role == "0":
                 print("Hasta luego.")
                 return
-            if choice not in {"1", "2", "3", "4", "5", "6", "7", "8"}:
-                print("Opción inválida. Intente de nuevo.")
-                continue
-
-            if choice == "5":
-                self._set_distance_between_properties()
-                continue
-            if choice == "6":
-                self._query_properties_within_radius()
-                continue
-            if choice == "7":
-                self._find_shortest_property_path()
-                continue
-
-            entity = self._select_entity()
-            if entity is None:
-                continue
-
-            if choice == "1":
-                self._create(entity)
-            elif choice == "2":
-                self._update(entity)
-            elif choice == "3":
-                self._read(entity)
+            if role == "1":
+                self._run_advisor_menu()
+            elif role == "2":
+                self._run_boss_menu()
             else:
-                self._delete(entity)
+                print("Opción inválida. Intente de nuevo.")
 
-    def _select_entity(self):
-        print("\nSeleccione el tipo de registro:")
-        for index, entity in enumerate(ENTITY_TYPES, start=1):
-            print(f"{index}. {entity['singular'].title()}")
-        print("0. Volver")
-
-        choice = input("Opción: ").strip()
-        if choice == "0":
-            return None
-        if not choice.isdigit() or not 1 <= int(choice) <= len(ENTITY_TYPES):
-            print("Tipo de registro inválido.")
-            return None
-        return ENTITY_TYPES[int(choice) - 1]
-
-    def _create(self, entity):
-        properties = {}
-        for field in entity["fields"]:
-            properties[field["name"]] = self._read_field(field)
-
-        if self._operations.create(entity, properties):
-            print(f"{entity['singular'].title()} creada correctamente.")
-        else:
-            print(f"No se pudo crear la {entity['singular']}.")
-
-    def _read(self, entity):
-        records = self._operations.read(entity)
-        if not records:
-            print(f"No hay {entity['plural']} registradas.")
-            return
-        for record in records:
-            print(" | ".join(f"{key}: {value}" for key, value in record.items()))
-
-    def _update(self, entity):
-        identifier = input(f"ID de la {entity['singular']}: ").strip()
-        editable_fields = [
-            field for field in entity["fields"] if field["name"] != "id"
-        ]
-
-        print("Campos disponibles:")
-        for index, field in enumerate(editable_fields, start=1):
-            print(f"{index}. {field['prompt']}")
-
-        choice = input("Campo a actualizar: ").strip()
-        if not choice.isdigit() or not 1 <= int(choice) <= len(editable_fields):
-            print("Campo inválido.")
+    def _run_advisor_menu(self):
+        advisor_id = input("ID del asesor: ").strip()
+        advisor = self._operations.get_advisor(advisor_id)
+        if advisor is None:
+            print(f"No se encontró asesor con ID {advisor_id}.")
             return
 
-        field = editable_fields[int(choice) - 1]
-        value = self._read_field(field)
-        updated = self._operations.update(
-            entity, identifier, {field["name"]: value}
-        )
-        if updated is None:
-            print(f"No se encontró {entity['singular']} con ID {identifier}.")
-        else:
-            print(f"{entity['singular'].title()} actualizada correctamente.")
-
-    def _delete(self, entity):
-        identifier = input(f"ID de la {entity['singular']}: ").strip()
-        if self._operations.delete(entity, identifier):
-            print(f"{entity['singular'].title()} eliminada correctamente.")
-        else:
-            print(f"No se encontró {entity['singular']} con ID {identifier}.")
-
-    def _set_distance_between_properties(self):
-        property1_id = input("ID de la primera propiedad: ").strip()
-        property2_id = input("ID de la segunda propiedad: ").strip()
-        if self._operations.set_distance_between_properties(
-            property1_id, property2_id
-        ):
-            print("Distancia establecida correctamente.")
-        else:
-            print("No se pudo establecer la distancia entre las propiedades.")
-
-    def _query_properties_within_radius(self):
-        entity_id = input("ID de la propiedad: ").strip()
-        radius = input("Radio (en metros): ").strip()
-        try:
-            radius = float(radius)
-            if not math.isfinite(radius) or radius < 0:
-                raise ValueError
-        except ValueError:
-            print("Radio inválido. Debe ser un número.")
-            return
-        properties = self._operations.query_properties_within_radius(entity_id, radius)
-        if not properties:
-            print("No se encontraron propiedades dentro del radio especificado.")
-            return
-        for property_record in properties:
-            print(" | ".join(f"{key}: {value}" for key, value in property_record.items()))
-
-    def _find_shortest_property_path(self):
-        start_id = input("ID de la propiedad de origen: ").strip()
-        end_id = input("ID de la propiedad de destino: ").strip()
-        result = self._operations.find_shortest_property_path(start_id, end_id)
-        if result is None:
-            print("No se encontró una ruta entre las propiedades.")
-            return
-        print("Ruta: " + " -> ".join(result["properties"]))
-        print(f"Distancia total: {result['distance']}")
-
-    @staticmethod
-    def _read_field(field):
         while True:
-            value = input(f"{field['prompt']}: ").strip()
-            try:
-                return field["value_type"](value)
-            except ValueError:
-                print(f"'{value}' no es un valor válido para {field['prompt']}.")
+            print(f"\nMenú de Asesor: {advisor.get('nombre', advisor_id)}")
+            print("1. Mi perfil")
+            print("2. Clientes")
+            print("3. Mis propiedades asignadas")
+            print("0. Cerrar sesión")
+            choice = input("Opción: ").strip()
+            if choice == "0":
+                return
+            if choice == "1":
+                AdvisorsMenu(self._operations, "advisor", advisor_id).run()
+            elif choice == "2":
+                ClientsMenu(self._operations, "advisor", advisor_id).run()
+            elif choice == "3":
+                PropertiesMenu(self._operations, "advisor", advisor_id).run()
+            else:
+                print("Opción inválida. Intente de nuevo.")
+
+    def _run_boss_menu(self):
+        while True:
+            print("\nMenú de Jefe / Captador:")
+            print("1. Asesores")
+            print("2. Clientes")
+            print("3. Propiedades")
+            print("4. Relaciones")
+            print("0. Cerrar sesión")
+            choice = input("Opción: ").strip()
+            if choice == "0":
+                return
+            if choice == "1":
+                AdvisorsMenu(self._operations).run()
+            elif choice == "2":
+                ClientsMenu(self._operations).run()
+            elif choice == "3":
+                PropertiesMenu(self._operations).run()
+            elif choice == "4":
+                RelationsMenu(self._operations).run()
+            else:
+                print("Opción inválida. Intente de nuevo.")
