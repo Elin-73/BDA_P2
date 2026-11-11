@@ -1,10 +1,12 @@
 import heapq
 import math
+import re
 
 
 ENTITY_TYPES = [
     {
         "label": "Propiedad",
+        "id_prefix": "p",
         "singular": "propiedad",
         "plural": "propiedades",
         "fields": [
@@ -26,6 +28,7 @@ ENTITY_TYPES = [
     },
     {
         "label": "Cliente",
+        "id_prefix": "c",
         "singular": "cliente",
         "plural": "clientes",
         "fields": [
@@ -41,6 +44,7 @@ ENTITY_TYPES = [
     },
     {
         "label": "Asesor",
+        "id_prefix": "a",
         "singular": "asesor",
         "plural": "asesores",
         "fields": [
@@ -56,13 +60,49 @@ ENTITY_TYPES = [
     },
 ]
 
+CLIENT_BOSS_CREATOR = "boss"
+
 
 class MemgraphController:
-    def __init__(self, connection):
+    def __init__(self, connection, advisor_default_password=None):
         self._connection = connection
+        self._advisor_default_password = advisor_default_password
 
-    def create(self, entity, properties, advisor_id=None):
+    def create(
+        self,
+        entity,
+        properties,
+        advisor_id=None,
+        actor_id=None,
+        responsible_advisor_id=None,
+    ):
         self._validate_properties(entity, properties)
+        if entity["label"] == "Cliente":
+            if not actor_id:
+                raise ValueError("Se requiere identificar quién creó el cliente.")
+            if actor_id != CLIENT_BOSS_CREATOR:
+                responsible_advisor_id = actor_id
+            query = "CREATE (node:Cliente) SET node += $properties, node.created_by = $actor_id "
+            parameters = {"properties": properties, "actor_id": actor_id}
+            if responsible_advisor_id is not None:
+                query = (
+                    "MATCH (advisor:Asesor {id: $responsible_advisor_id}) "
+                    + query
+                    + "CREATE (node)-[:RESPONSIBLE_FOR]->(advisor) "
+                )
+                parameters["responsible_advisor_id"] = responsible_advisor_id
+            query += "RETURN node.id AS id"
+            return next(
+                iter(self._connection.execute_and_fetch(query, parameters)),
+                None,
+            ) is not None
+        if entity["label"] == "Asesor":
+            if self._advisor_default_password is None:
+                raise RuntimeError("Falta configurar la contraseña inicial de asesores.")
+            self._connection.execute(
+                f"CREATE USER {self._format_username(properties['id'])} "
+                f"IDENTIFIED BY {self._format_password(self._advisor_default_password)}"
+            )
         if entity["label"] == "Propiedad" and advisor_id is not None:
             query = (
                 "MATCH (advisor:Asesor {id: $advisor_id}) "
@@ -86,7 +126,18 @@ class MemgraphController:
             None,
         ) is not None
 
-    def read(self, entity, advisor_id=None):
+    def get_latest_id(self, entity):
+        query = f"MATCH (node:{entity['label']}) RETURN node.id AS id"
+        identifiers = self._connection.execute_and_fetch(query)
+        prefix = entity["id_prefix"]
+        suffixes = []
+        for record in identifiers:
+            match = re.fullmatch(rf"{re.escape(prefix)}(\d+)", str(record["id"]))
+            if match:
+                suffixes.append(int(match.group(1)))
+        return max(suffixes, default=None)
+
+    def read(self, entity, advisor_id=None, actor_id=None):
         if entity["label"] == "Propiedad" and advisor_id is not None:
             query = (
                 "MATCH (advisor:Asesor {id: $advisor_id})"
@@ -98,6 +149,37 @@ class MemgraphController:
                 query, {"advisor_id": advisor_id}
             )
             return [dict(record["properties"]) for record in records]
+
+        if entity["label"] == "Cliente":
+            if not actor_id:
+                raise ValueError("Se requiere identificar quién consulta los clientes.")
+            parameters = {}
+            owner_filter = ""
+            if actor_id != CLIENT_BOSS_CREATOR:
+                owner_filter = "WHERE node.created_by = $actor_id "
+                parameters["actor_id"] = actor_id
+            query = (
+                "MATCH (node:Cliente) "
+                + owner_filter
+                + "OPTIONAL MATCH (node)-[:RESPONSIBLE_FOR]->(advisor:Asesor) "
+                "RETURN properties(node) AS properties, "
+                "advisor.id AS advisor_id, advisor.nombre AS advisor_nombre "
+                "ORDER BY node.id"
+            )
+            records = self._connection.execute_and_fetch(query, parameters)
+            clients = []
+            for record in records:
+                client = dict(record["properties"])
+                client.pop("created_by", None)
+                advisor_id = record.get("advisor_id")
+                advisor_name = record.get("advisor_nombre")
+                client["asesor_responsable"] = (
+                    f"{advisor_name} ({advisor_id})"
+                    if advisor_id is not None
+                    else "Sin asignar"
+                )
+                clients.append(client)
+            return clients
 
         query = (
             f"MATCH (node:{entity['label']}) "
@@ -120,7 +202,7 @@ class MemgraphController:
         )
         return dict(record["properties"]) if record is not None else None
 
-    def update(self, entity, identifier, updates, advisor_id=None):
+    def update(self, entity, identifier, updates, advisor_id=None, actor_id=None):
         allowed_fields = {
             field["name"] for field in entity["fields"] if field["name"] != "id"
         }
@@ -128,7 +210,15 @@ class MemgraphController:
             raise ValueError("Seleccione al menos un campo válido para actualizar.")
 
         parameters = {"id": identifier, "updates": updates}
-        if entity["label"] == "Propiedad" and advisor_id is not None:
+        if entity["label"] == "Cliente":
+            if not actor_id:
+                raise ValueError("Se requiere identificar quién actualiza el cliente.")
+            query = f"MATCH (node:Cliente {{id: $id}}) "
+            if actor_id != CLIENT_BOSS_CREATOR:
+                query += "WHERE node.created_by = $actor_id "
+                parameters["actor_id"] = actor_id
+            query += "SET node += $updates RETURN properties(node) AS properties"
+        elif entity["label"] == "Propiedad" and advisor_id is not None:
             query = (
                 "MATCH (advisor:Asesor {id: $advisor_id})"
                 "-[:ASSIGNED_TO]->(node:Propiedad {id: $id}) "
@@ -150,18 +240,85 @@ class MemgraphController:
         )
         return dict(record["properties"]) if record is not None else None
 
-    def delete(self, entity, identifier):
-        query = (
-            f"MATCH (node:{entity['label']} {{id: $id}}) "
+    def delete(self, entity, identifier, actor_id=None):
+        advisor_username = (
+            self._advisor_username(identifier)
+            if entity["label"] == "Asesor"
+            else None
+        )
+        query = f"MATCH (node:{entity['label']} {{id: $id}}) "
+        parameters = {"id": identifier}
+        if entity["label"] == "Cliente":
+            if not actor_id:
+                raise ValueError("Se requiere identificar quién elimina el cliente.")
+            if actor_id != CLIENT_BOSS_CREATOR:
+                query += "WHERE node.created_by = $actor_id "
+                parameters["actor_id"] = actor_id
+        query += (
             "WITH collect(node) AS matches "
             "FOREACH (node IN matches | DETACH DELETE node) "
             "RETURN size(matches) AS deleted"
         )
         record = next(
-            iter(self._connection.execute_and_fetch(query, {"id": identifier})),
+            iter(self._connection.execute_and_fetch(query, parameters)),
             None,
         )
-        return record is not None and record["deleted"] > 0
+        deleted = record is not None and record["deleted"] > 0
+        if deleted and advisor_username is not None:
+            self._connection.execute(f"DROP USER {advisor_username}")
+        return deleted
+
+    def assign_client_to_advisor(self, client_id, advisor_id, actor_id):
+        if not actor_id:
+            raise ValueError("Se requiere identificar quién asigna el cliente.")
+        query = (
+            "MATCH (client:Cliente {id: $client_id}) "
+            "MATCH (advisor:Asesor {id: $advisor_id}) "
+        )
+        parameters = {"client_id": client_id, "advisor_id": advisor_id}
+        if actor_id != CLIENT_BOSS_CREATOR:
+            query += "WHERE client.created_by = $actor_id "
+            parameters["actor_id"] = actor_id
+        query += (
+            "OPTIONAL MATCH (client)-[previous:RESPONSIBLE_FOR]->(:Asesor) "
+            "WITH client, advisor, collect(previous) AS previous_relations "
+            "FOREACH (previous IN previous_relations | DELETE previous) "
+            "MERGE (client)-[:RESPONSIBLE_FOR]->(advisor) "
+            "RETURN client.id AS id"
+        )
+        record = next(
+            iter(self._connection.execute_and_fetch(query, parameters)),
+            None,
+        )
+        return record is not None
+
+    def change_advisor_password(self, identifier, new_password):
+        self._connection.execute(
+            f"SET PASSWORD FOR {self._format_username(identifier)} "
+            f"TO {self._format_password(new_password)}"
+        )
+
+    @staticmethod
+    def _format_username(identifier):
+        username = MemgraphController._advisor_username(identifier)
+        if username is None:
+            raise ValueError("El ID del asesor no es válido para una cuenta de usuario.")
+        return username
+
+    @staticmethod
+    def _advisor_username(identifier):
+        if isinstance(identifier, str) and re.fullmatch(
+            r"[A-Za-z][A-Za-z0-9_]*", identifier
+        ):
+            return identifier
+        return None
+
+    @staticmethod
+    def _format_password(password):
+        if not isinstance(password, str) or not password or not password.isprintable():
+            raise ValueError("La contraseña debe contener caracteres imprimibles.")
+        escaped = password.replace("\\", "\\\\").replace("'", "\\'")
+        return f"'{escaped}'"
 
     def assign_property_to_advisor(self, property_id, advisor_id):
         query = (

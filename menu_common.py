@@ -13,6 +13,7 @@ class EntityMenu:
         is_advisor_profile = self._role == "advisor" and entity["label"] == "Asesor"
         can_delete = self._role == "boss" or entity["label"] == "Cliente"
         can_create = not is_advisor_profile
+        can_assign_client = entity["label"] == "Cliente"
 
         while True:
             print(f"\nMenú de {entity['plural'].title()}:")
@@ -25,6 +26,8 @@ class EntityMenu:
                 options.extend(["Actualizar", "Consultar"])
                 if can_delete:
                     options.append("Eliminar")
+                if can_assign_client:
+                    options.append("Asignar asesor responsable")
             for index, option in enumerate(options, start=1):
                 print(f"{index}. {option}")
             print("0. Volver")
@@ -45,13 +48,40 @@ class EntityMenu:
                 self._read()
             elif action == "Eliminar":
                 self._delete()
+            elif action == "Asignar asesor responsable":
+                self._assign_responsible_advisor()
 
     def _create(self):
-        properties = {
-            field["name"]: self._read_field(field)
-            for field in self._entity["fields"]
-        }
-        if self._entity["label"] == "Propiedad" and self._role == "advisor":
+        latest_id = self._operations.get_latest_id(self._entity)
+        next_number = latest_id + 1 if latest_id is not None else 1
+        properties = {}
+        for field in self._entity["fields"]:
+            name = field["name"]
+            if name == "id":
+                continue
+            if self._entity["label"] == "Asesor" and name == "correo_electronico":
+                continue
+            properties[name] = self._read_field(field)
+        properties["id"] = f"{self._entity['id_prefix']}{next_number}"
+        if self._entity["label"] == "Asesor":
+            properties["correo_electronico"] = (
+                f"{properties['nombre']}@Mendoza.mx"
+            )
+        if self._entity["label"] == "Cliente":
+            actor_id = (
+                self._advisor_id
+                if self._role == "advisor"
+                else "boss"
+            )
+            created = self._operations.create(
+                self._entity,
+                properties,
+                actor_id=actor_id,
+                responsible_advisor_id=(
+                    self._advisor_id if self._role == "advisor" else None
+                ),
+            )
+        elif self._entity["label"] == "Propiedad" and self._role == "advisor":
             created = self._operations.create(
                 self._entity, properties, advisor_id=self._advisor_id
             )
@@ -63,7 +93,12 @@ class EntityMenu:
             print(f"No se pudo crear la {self._entity['singular']}.")
 
     def _read(self):
-        if self._entity["label"] == "Propiedad" and self._role == "advisor":
+        if self._entity["label"] == "Cliente":
+            records = self._operations.read(
+                self._entity,
+                actor_id=self._advisor_id if self._role == "advisor" else "boss",
+            )
+        elif self._entity["label"] == "Propiedad" and self._role == "advisor":
             records = self._operations.read(
                 self._entity, advisor_id=self._advisor_id
             )
@@ -83,7 +118,13 @@ class EntityMenu:
                 f"ID de la {self._entity['singular']}: "
             ).strip()
         editable_fields = [
-            field for field in self._entity["fields"] if field["name"] != "id"
+            field
+            for field in self._entity["fields"]
+            if field["name"] != "id"
+            and not (
+                self._entity["label"] == "Asesor"
+                and field["name"] == "correo_electronico"
+            )
         ]
         print("Campos disponibles:")
         for index, field in enumerate(editable_fields, start=1):
@@ -95,16 +136,26 @@ class EntityMenu:
             return
         field = editable_fields[int(choice) - 1]
         value = self._read_field(field)
-        if self._entity["label"] == "Propiedad" and self._role == "advisor":
+        updates = {field["name"]: value}
+        if self._entity["label"] == "Asesor" and field["name"] == "nombre":
+            updates["correo_electronico"] = f"{value}@Mendoza.mx"
+        if self._entity["label"] == "Cliente":
             updated = self._operations.update(
                 self._entity,
                 identifier,
-                {field["name"]: value},
+                updates,
+                actor_id=self._advisor_id if self._role == "advisor" else "boss",
+            )
+        elif self._entity["label"] == "Propiedad" and self._role == "advisor":
+            updated = self._operations.update(
+                self._entity,
+                identifier,
+                updates,
                 advisor_id=self._advisor_id,
             )
         else:
             updated = self._operations.update(
-                self._entity, identifier, {field["name"]: value}
+                self._entity, identifier, updates
             )
         if updated is None:
             print(f"No se encontró {self._entity['singular']} con ID {identifier}.")
@@ -115,10 +166,29 @@ class EntityMenu:
         identifier = input(
             f"ID de la {self._entity['singular']}: "
         ).strip()
-        if self._operations.delete(self._entity, identifier):
+        if self._entity["label"] == "Cliente":
+            deleted = self._operations.delete(
+                self._entity,
+                identifier,
+                actor_id=self._advisor_id if self._role == "advisor" else "boss",
+            )
+        else:
+            deleted = self._operations.delete(self._entity, identifier)
+        if deleted:
             print(f"{self._entity['singular'].title()} eliminada correctamente.")
         else:
             print(f"No se encontró {self._entity['singular']} con ID {identifier}.")
+
+    def _assign_responsible_advisor(self):
+        client_id = input("ID del cliente: ").strip()
+        advisor_id = input("ID del asesor responsable: ").strip()
+        actor_id = self._advisor_id if self._role == "advisor" else "boss"
+        if self._operations.assign_client_to_advisor(
+            client_id, advisor_id, actor_id
+        ):
+            print("Asesor responsable asignado correctamente.")
+        else:
+            print("No se pudo asignar: verifique los IDs y sus permisos.")
 
     @staticmethod
     def _read_field(field):

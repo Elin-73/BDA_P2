@@ -19,6 +19,7 @@ def main():
 
     try:
         from gqlalchemy import Memgraph
+        from gqlalchemy.exceptions import GQLAlchemyWaitForConnectionError
     except ModuleNotFoundError as exc:
         if exc.name != "gqlalchemy":
             raise
@@ -32,15 +33,35 @@ def main():
     except ValueError as exc:
         raise RuntimeError("La variable MEMGRAPH_PORT debe ser un entero.") from exc
 
+    host = required_env("MEMGRAPH_HOST")
     connection = Memgraph(
-        required_env("MEMGRAPH_HOST"),
+        host,
         port,
         required_env("MEMGRAPH_USERNAME"),
         required_env("MEMGRAPH_PASSWORD"),
         encrypted=True,
     )
+    advisor_default_password = required_env("ASESOR_DEFAULT_PASSWORD")
+
+    def authenticate_advisor(identifier, password):
+        try:
+            Memgraph(
+                host,
+                port,
+                identifier,
+                password,
+                encrypted=True,
+            )
+        except GQLAlchemyWaitForConnectionError:
+            return False
+        return True
+
     print("Conexión a Memgraph configurada.")
-    ConsoleMenu(MemgraphController(connection)).run()
+    ConsoleMenu(
+        MemgraphController(connection, advisor_default_password),
+        boss_password=required_env("BOSS_PASSWORD"),
+        authenticate_advisor=authenticate_advisor,
+    ).run()
 
 
 if __name__ == "__main__":

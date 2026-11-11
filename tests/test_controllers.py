@@ -8,11 +8,15 @@ class FakeConnection:
         self.records = records or []
         self.query = ""
         self.parameters = None
+        self.executed_queries = []
 
     def execute_and_fetch(self, query, parameters=None):
         self.query = query
         self.parameters = parameters
         return self.records
+
+    def execute(self, query, parameters=None):
+        self.executed_queries.append((query, parameters))
 
 
 class MemgraphControllerTests(unittest.TestCase):
@@ -33,6 +37,34 @@ class MemgraphControllerTests(unittest.TestCase):
         self.assertTrue(created)
         self.assertNotIn("Calle 1", connection.query)
         self.assertEqual(connection.parameters, {"properties": properties})
+
+    def test_create_advisor_issues_create_user_with_configured_password(self):
+        connection = FakeConnection([{"id": "a1"}])
+        controller = MemgraphController(connection, "default'pass")
+        properties = {
+            "id": "a1",
+            "nombre": "Ana",
+            "correo_electronico": "Ana@Mendoza.mx",
+            "telefono": "555",
+        }
+
+        self.assertTrue(controller.create(ENTITY_TYPES[2], properties))
+
+        self.assertEqual(
+            connection.executed_queries[0][0],
+            "CREATE USER a1 IDENTIFIED BY 'default\\'pass'",
+        )
+        self.assertIn("CREATE (node:Asesor)", connection.query)
+
+    def test_get_latest_id_returns_highest_numeric_suffix(self):
+        connection = FakeConnection(
+            [{"id": "p9"}, {"id": "p12"}, {"id": "p2"}, {"id": "other"}]
+        )
+
+        latest_id = MemgraphController(connection).get_latest_id(ENTITY_TYPES[0])
+
+        self.assertEqual(latest_id, 12)
+        self.assertIn("MATCH (node:Propiedad)", connection.query)
 
     def test_create_for_advisor_assigns_property_to_existing_advisor(self):
         connection = FakeConnection([{"id": "p1"}])
@@ -55,14 +87,89 @@ class MemgraphControllerTests(unittest.TestCase):
             connection.parameters, {"advisor_id": "a1", "properties": properties}
         )
 
+    def test_create_client_records_creator_and_responsible_advisor(self):
+        connection = FakeConnection([{"id": "c1"}])
+        properties = {
+            "id": "c1",
+            "nombre": "Nora",
+            "correo_electronico": "nora@example.mx",
+            "telefono": "555",
+        }
+
+        created = MemgraphController(connection).create(
+            ENTITY_TYPES[1],
+            properties,
+            actor_id="a1",
+            responsible_advisor_id="a1",
+        )
+
+        self.assertTrue(created)
+        self.assertIn("node.created_by = $actor_id", connection.query)
+        self.assertIn("CREATE (node)-[:RESPONSIBLE_FOR]->(advisor)", connection.query)
+        self.assertEqual(
+            connection.parameters,
+            {
+                "properties": properties,
+                "actor_id": "a1",
+                "responsible_advisor_id": "a1",
+            },
+        )
+
+    def test_create_client_requires_creator(self):
+        with self.assertRaises(ValueError):
+            MemgraphController(FakeConnection()).create(
+                ENTITY_TYPES[1], {"id": "c1"}
+            )
+
     def test_read_returns_records_for_selected_entity(self):
         connection = FakeConnection([{"properties": {"id": "c1", "nombre": "Ana"}}])
         controller = MemgraphController(connection)
 
-        records = controller.read(ENTITY_TYPES[1])
+        records = controller.read(ENTITY_TYPES[1], actor_id="boss")
 
-        self.assertEqual(records, [{"id": "c1", "nombre": "Ana"}])
+        self.assertEqual(
+            records,
+            [
+                {
+                    "id": "c1",
+                    "nombre": "Ana",
+                    "asesor_responsable": "Sin asignar",
+                }
+            ],
+        )
         self.assertIn("MATCH (node:Cliente)", connection.query)
+
+    def test_read_client_only_returns_records_created_by_advisor(self):
+        connection = FakeConnection(
+            [
+                {
+                    "properties": {
+                        "id": "c1",
+                        "nombre": "Ana",
+                        "created_by": "a1",
+                    },
+                    "advisor_id": "a2",
+                    "advisor_nombre": "Luis",
+                }
+            ]
+        )
+
+        records = MemgraphController(connection).read(
+            ENTITY_TYPES[1], actor_id="a1"
+        )
+
+        self.assertEqual(
+            records,
+            [
+                {
+                    "id": "c1",
+                    "nombre": "Ana",
+                    "asesor_responsable": "Luis (a2)",
+                }
+            ],
+        )
+        self.assertIn("WHERE node.created_by = $actor_id", connection.query)
+        self.assertEqual(connection.parameters, {"actor_id": "a1"})
 
     def test_update_rejects_id_and_unknown_fields(self):
         controller = MemgraphController(FakeConnection())
@@ -72,6 +179,22 @@ class MemgraphControllerTests(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             controller.update(ENTITY_TYPES[1], "c1", {"unknown": "value"})
+
+    def test_update_client_is_scoped_to_creator(self):
+        connection = FakeConnection([{"properties": {"id": "c1"}}])
+
+        MemgraphController(connection).update(
+            ENTITY_TYPES[1],
+            "c1",
+            {"nombre": "Nuevo"},
+            actor_id="a1",
+        )
+
+        self.assertIn("WHERE node.created_by = $actor_id", connection.query)
+        self.assertEqual(
+            connection.parameters,
+            {"id": "c1", "updates": {"nombre": "Nuevo"}, "actor_id": "a1"},
+        )
 
     def test_advisor_property_read_and_update_are_scoped_to_assignment(self):
         connection = FakeConnection([{"properties": {"id": "p1"}}])
@@ -102,11 +225,81 @@ class MemgraphControllerTests(unittest.TestCase):
         connection = FakeConnection([{"deleted": 0}])
         controller = MemgraphController(connection)
 
-        deleted = controller.delete(ENTITY_TYPES[2], "a' OR true //")
+        deleted = controller.delete(ENTITY_TYPES[0], "p' OR true //")
 
         self.assertFalse(deleted)
+        self.assertNotIn("p' OR true", connection.query)
+        self.assertEqual(connection.parameters, {"id": "p' OR true //"})
+
+    def test_delete_client_is_scoped_to_creator(self):
+        connection = FakeConnection([{"deleted": 0}])
+
+        deleted = MemgraphController(connection).delete(
+            ENTITY_TYPES[1], "c1", actor_id="a1"
+        )
+
+        self.assertFalse(deleted)
+        self.assertIn("WHERE node.created_by = $actor_id", connection.query)
+        self.assertEqual(connection.parameters, {"id": "c1", "actor_id": "a1"})
+
+    def test_assign_client_replaces_responsible_advisor_and_checks_creator(self):
+        connection = FakeConnection([{"id": "c1"}])
+
+        assigned = MemgraphController(connection).assign_client_to_advisor(
+            "c1", "a2", "a1"
+        )
+
+        self.assertTrue(assigned)
+        self.assertIn("WHERE client.created_by = $actor_id", connection.query)
+        self.assertIn("collect(previous) AS previous_relations", connection.query)
+        self.assertIn("MERGE (client)-[:RESPONSIBLE_FOR]->(advisor)", connection.query)
+        self.assertEqual(
+            connection.parameters,
+            {"client_id": "c1", "advisor_id": "a2", "actor_id": "a1"},
+        )
+
+    def test_delete_legacy_numeric_advisor_without_user_account(self):
+        connection = FakeConnection([{"deleted": 1}])
+
+        deleted = MemgraphController(connection).delete(ENTITY_TYPES[2], 1)
+
+        self.assertTrue(deleted)
+        self.assertIn("MATCH (node:Asesor", connection.query)
+        self.assertEqual(connection.parameters, {"id": 1})
+        self.assertEqual(connection.executed_queries, [])
+
+    def test_delete_advisor_with_non_username_id_does_not_run_user_command(self):
+        connection = FakeConnection([{"deleted": 1}])
+
+        deleted = MemgraphController(connection).delete(
+            ENTITY_TYPES[2], "a' OR true //"
+        )
+
+        self.assertTrue(deleted)
         self.assertNotIn("a' OR true", connection.query)
         self.assertEqual(connection.parameters, {"id": "a' OR true //"})
+        self.assertEqual(connection.executed_queries, [])
+
+    def test_delete_advisor_drops_user_after_deleting_node(self):
+        connection = FakeConnection([{"deleted": 1}])
+
+        deleted = MemgraphController(connection).delete(ENTITY_TYPES[2], "a1")
+
+        self.assertTrue(deleted)
+        self.assertEqual(connection.executed_queries, [("DROP USER a1", None)])
+
+    def test_change_advisor_password_escapes_password_and_validates_id(self):
+        connection = FakeConnection()
+        controller = MemgraphController(connection)
+
+        controller.change_advisor_password("a1", "new'pass")
+
+        self.assertEqual(
+            connection.executed_queries,
+            [("SET PASSWORD FOR a1 TO 'new\\'pass'", None)],
+        )
+        with self.assertRaises(ValueError):
+            controller.change_advisor_password("a1' OR true //", "password")
 
     def test_set_distance_uses_property_ids_as_parameters(self):
         connection = FakeConnection([{"distance": 5.0}])
