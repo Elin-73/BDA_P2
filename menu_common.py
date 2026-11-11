@@ -53,13 +53,17 @@ class EntityMenu:
 
     def _create(self):
         latest_id = self._operations.get_latest_id(self._entity)
+        # con entidad nos referimos a si es cliente, asesor o propiedad.
         next_number = latest_id + 1 if latest_id is not None else 1
         properties = {}
+        # propiedades es un diccionario en el cual almacenaremos los valores del ciclo siguiente.
         for field in self._entity["fields"]:
             name = field["name"]
+            # field["name"] es el nombre del campo en el que estamos en este ciclo
             if name == "id":
                 continue
             if self._entity["label"] == "Asesor" and name == "correo_electronico":
+            # entity["label"] es el tipo de entidad.
                 continue
             properties[name] = self._read_field(field)
         properties["id"] = f"{self._entity['id_prefix']}{next_number}"

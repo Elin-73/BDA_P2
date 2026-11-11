@@ -49,7 +49,7 @@ class ConsoleMenu:
         if advisor is None:
             print(f"No se encontró asesor con ID {advisor_id}.")
             return
-
+        #Verificamos la identidad del asesor.
         password = getpass.getpass("Contraseña: ")
         if (
             self._authenticate_advisor is None
@@ -82,8 +82,8 @@ class ConsoleMenu:
     def _change_advisor_password(self, advisor_id):
         new_password = getpass.getpass("Nueva contraseña: ")
         confirmation = getpass.getpass("Confirme la nueva contraseña: ")
-        if not new_password or not new_password.isprintable():
-            print("La contraseña debe contener caracteres imprimibles.")
+        if not new_password or not new_password.isalnum():
+            print("La contraseña debe contener caracteres alfanuméricos.")
             return
         if new_password != confirmation:
             print("Las contraseñas no coinciden.")
